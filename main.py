@@ -35,5 +35,5 @@ def process_video():
     return send_file(output_path, mimetype='video/mp4', as_attachment=True, download_name='vertical_clip.mp4')
 
 if __name__ == '__main__':
-   port = int(os.environ.get('PORT', 5000))
-app.run(host='0.0.0.0', port=port, debug=False)
+port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
