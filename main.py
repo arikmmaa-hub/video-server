@@ -20,7 +20,6 @@ def process_video():
     
     output_path = input_path.replace('.mp4', '_vertical.mp4')
     
-    # FFmpeg - קרופ אנכי 1080x1920
     subprocess.run([
         'ffmpeg', '-i', input_path,
         '-vf', 'crop=ih*(9/16):ih,scale=1080:1920',
@@ -37,9 +36,3 @@ def process_video():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-```
-
-**קובץ 2: `requirements.txt`**
-```
-flask
-flask-cors
