@@ -24,15 +24,17 @@ def process_video():
 
     output_path = input_path.replace(".mp4", "_vertical.mp4")
 
-    subprocess.run([
-        "ffmpeg", "-i", input_path,
-        "-vf", "crop=ih*(9/16):ih,scale=1080:1920",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "copy",
-        output_path
-    ], check=True)
+   subprocess.run([
+    "ffmpeg", "-y", "-i", input_path,
+    "-vf", "crop=ih*9/16:ih,scale=720:1280",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "28",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    output_path
+], check=True)
 
     os.unlink(input_path)
 
