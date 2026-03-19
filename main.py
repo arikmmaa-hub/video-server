@@ -1,6 +1,5 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-import subprocess
 import tempfile
 import os
 import cv2
@@ -8,86 +7,108 @@ import cv2
 app = Flask(__name__)
 CORS(app)
 
+
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "server is running"})
 
+
 @app.route("/process", methods=["POST"])
 def process_video():
-    x = int(request.form.get("x", 0))
-y = int(request.form.get("y", 0))
-w = int(request.form.get("width", 100))
-h = int(request.form.get("height", 100))
-    if "video" not in request.files:
-        return jsonify({"error": "No video file uploaded"}), 400
+    try:
+        x = int(request.form.get("x", 0))
+        y = int(request.form.get("y", 0))
+        w = int(request.form.get("width", 100))
+        h = int(request.form.get("height", 100))
 
-    video_file = request.files["video"]
+        if "video" not in request.files:
+            return jsonify({"error": "No video file uploaded"}), 400
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as input_file:
-        video_file.save(input_file.name)
-        input_path = input_file.name
+        video_file = request.files["video"]
 
-    output_path = input_path.replace(".mp4", "_vertical.mp4")
-cap = cv2.VideoCapture(input_path)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as input_file:
+            video_file.save(input_file.name)
+            input_path = input_file.name
 
-# Tracker
-tracker = cv2.TrackerCSRT_create()
+        output_path = input_path.replace(".mp4", "_tracked.mp4")
 
-ret, frame = cap.read()
-if not ret:
-    return "Failed to read video", 500
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            return jsonify({"error": "Failed to open video"}), 500
 
-# init tracking
-tracker.init(frame, (x, y, w, h))
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            return jsonify({"error": "Failed to read first frame"}), 500
 
-frames = []
+        # נסה CSRT דרך legacy, ואם אין - עבור ל-MOSSE
+        tracker = None
+        try:
+            tracker = cv2.legacy.TrackerCSRT_create()
+        except Exception:
+            try:
+                tracker = cv2.legacy.TrackerMOSSE_create()
+            except Exception:
+                cap.release()
+                if os.path.exists(input_path):
+                    os.unlink(input_path)
+                return jsonify({"error": "No supported OpenCV tracker found"}), 500
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+        tracker.init(frame, (x, y, w, h))
 
-    success, box = tracker.update(frame)
-height, width, _ = frames[0].shape
+        frames = [frame]
 
-out = cv2.VideoWriter(
-    output_path,
-    cv2.VideoWriter_fourcc(*'mp4v'),
-    30,
-    (width, height)
-)
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-for f in frames:
-    out.write(f)
+            success, box = tracker.update(frame)
 
-out.release()
-cap.release()
-    if success:
-        x, y, w, h = [int(v) for v in box]
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
+            if success:
+                bx, by, bw, bh = [int(v) for v in box]
+                cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
 
-    frames.append(frame)
+            frames.append(frame)
 
-   # subprocess.run([
-     #   "ffmpeg", "-y", "-i", input_path,
-      #  "-vf", "crop=ih*9/16:ih,scale=720:1280",
-      #  "-c:v", "libx264",
-       # "-preset", "veryfast",
-       # "-crf", "28",
-      #  "-pix_fmt", "yuv420p",
-       # "-c:a", "aac",
-       # "-b:a", "128k",
-       # output_path
-  #  ], check=True)
+        cap.release()
 
-    os.unlink(input_path)
+        if not frames:
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            return jsonify({"error": "No frames processed"}), 500
 
-    return send_file(
-        output_path,
-        mimetype="video/mp4",
-        as_attachment=True,
-        download_name="vertical_clip.mp4"
-    )
+        height, width, _ = frames[0].shape
+
+        out = cv2.VideoWriter(
+            output_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            30,
+            (width, height)
+        )
+
+        for f in frames:
+            out.write(f)
+
+        out.release()
+
+        if os.path.exists(input_path):
+            os.unlink(input_path)
+
+        return send_file(
+            output_path,
+            mimetype="video/mp4",
+            as_attachment=True,
+            download_name="tracked_clip.mp4"
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
