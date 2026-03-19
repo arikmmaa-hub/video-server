@@ -3,6 +3,7 @@ from flask_cors import CORS
 import subprocess
 import tempfile
 import os
+import cv2
 
 app = Flask(__name__)
 CORS(app)
@@ -27,6 +28,32 @@ h = int(request.form.get("height", 100))
         input_path = input_file.name
 
     output_path = input_path.replace(".mp4", "_vertical.mp4")
+cap = cv2.VideoCapture(input_path)
+
+# Tracker
+tracker = cv2.TrackerCSRT_create()
+
+ret, frame = cap.read()
+if not ret:
+    return "Failed to read video", 500
+
+# init tracking
+tracker.init(frame, (x, y, w, h))
+
+frames = []
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    success, box = tracker.update(frame)
+
+    if success:
+        x, y, w, h = [int(v) for v in box]
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
+
+    frames.append(frame)
 
     subprocess.run([
         "ffmpeg", "-y", "-i", input_path,
