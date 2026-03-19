@@ -13,6 +13,10 @@ def home():
 
 @app.route("/process", methods=["POST"])
 def process_video():
+    x = int(request.form.get("x", 0))
+y = int(request.form.get("y", 0))
+w = int(request.form.get("width", 100))
+h = int(request.form.get("height", 100))
     if "video" not in request.files:
         return jsonify({"error": "No video file uploaded"}), 400
 
