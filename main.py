@@ -3,6 +3,7 @@ from flask_cors import CORS
 import tempfile
 import os
 import cv2
+import subprocess
 
 app = Flask(__name__)
 CORS(app)
@@ -31,12 +32,17 @@ def process_video():
             input_path = input_file.name
 
         output_path = input_path.replace(".mp4", "_tracked.mp4")
+        temp_avi_path = input_path.replace(".mp4", "_tracked_temp.avi")
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
             if os.path.exists(input_path):
                 os.unlink(input_path)
             return jsonify({"error": "Failed to open video"}), 500
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            fps = 30.0
 
         ret, frame = cap.read()
         if not ret:
@@ -45,7 +51,6 @@ def process_video():
                 os.unlink(input_path)
             return jsonify({"error": "Failed to read first frame"}), 500
 
-        # נסה CSRT דרך legacy, ואם אין - עבור ל-MOSSE
         tracker = None
         try:
             tracker = cv2.legacy.TrackerCSRT_create()
@@ -60,20 +65,26 @@ def process_video():
 
         tracker.init(frame, (x, y, w, h))
 
-        frames = [frame]
+        frames = []
+
+        # First frame
+        first_frame = frame.copy()
+        cv2.rectangle(first_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        frames.append(first_frame)
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
+            output_frame = frame.copy()
             success, box = tracker.update(frame)
 
             if success:
                 bx, by, bw, bh = [int(v) for v in box]
-                cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+                cv2.rectangle(output_frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
 
-            frames.append(frame)
+            frames.append(output_frame)
 
         cap.release()
 
@@ -85,19 +96,32 @@ def process_video():
         height, width, _ = frames[0].shape
 
         out = cv2.VideoWriter(
-            output_path,
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            30,
+            temp_avi_path,
+            cv2.VideoWriter_fourcc(*"MJPG"),
+            fps,
             (width, height)
         )
 
         for f in frames:
-            out.write(f)
+            out.write(f.copy())
 
         out.release()
 
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", temp_avi_path,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            output_path
+        ], check=True)
+
         if os.path.exists(input_path):
             os.unlink(input_path)
+        if os.path.exists(temp_avi_path):
+            os.unlink(temp_avi_path)
 
         return send_file(
             output_path,
@@ -112,4 +136,4 @@ def process_video():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
