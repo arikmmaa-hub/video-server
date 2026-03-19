@@ -48,7 +48,20 @@ while True:
         break
 
     success, box = tracker.update(frame)
+height, width, _ = frames[0].shape
 
+out = cv2.VideoWriter(
+    output_path,
+    cv2.VideoWriter_fourcc(*'mp4v'),
+    30,
+    (width, height)
+)
+
+for f in frames:
+    out.write(f)
+
+out.release()
+cap.release()
     if success:
         x, y, w, h = [int(v) for v in box]
         cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
