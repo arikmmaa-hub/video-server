@@ -17,17 +17,12 @@ def home():
 def process_video():
     input_path = None
     output_path = None
-    cap = None
-    out = None
 
     try:
         x = int(request.form.get("x", 0))
         y = int(request.form.get("y", 0))
         w = int(request.form.get("width", 100))
         h = int(request.form.get("height", 100))
-
-        print("=== PROCESS STARTED ===")
-        print(f"Tracking box: x={x}, y={y}, w={w}, h={h}")
 
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
@@ -41,8 +36,6 @@ def process_video():
         output_path = input_path.replace(".mp4", "_tracked.mp4")
 
         cap = cv2.VideoCapture(input_path)
-        print("cap opened:", cap.isOpened())
-
         if not cap.isOpened():
             return jsonify({"error": "Failed to open video"}), 500
 
@@ -51,64 +44,41 @@ def process_video():
             fps = 30.0
 
         ret, frame = cap.read()
-        print("first frame read:", ret)
-
         if not ret:
             return jsonify({"error": "Failed to read first frame"}), 500
 
-        print("first frame shape:", frame.shape)
-        print("first frame mean:", float(frame.mean()))
-
-        height, width, _ = frame.shape
-
-        # מוודא שהריבוע לא יוצא מגבולות הפריים
-        x = max(0, min(x, width - 1))
-        y = max(0, min(y, height - 1))
-        w = max(1, min(w, width - x))
-        h = max(1, min(h, height - y))
-
-        print(f"Adjusted box: x={x}, y={y}, w={w}, h={h}")
-        print(f"Video size: width={width}, height={height}, fps={fps}")
+        # 🎯 פורמט לאורך (9:16)
+        output_width = 720
+        output_height = 1280
 
         tracker = None
         try:
             tracker = cv2.legacy.TrackerCSRT_create()
-            print("Using CSRT tracker")
         except Exception:
-            try:
-                tracker = cv2.legacy.TrackerMOSSE_create()
-                print("Using MOSSE tracker")
-            except Exception:
-                return jsonify({"error": "No supported OpenCV tracker found"}), 500
+            tracker = cv2.legacy.TrackerMOSSE_create()
 
         tracker.init(frame, (x, y, w, h))
 
-        # כותבים ישר ל-MP4 בלי AVI ובלי ffmpeg
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        print("writer opened:", out.isOpened())
-
-        if not out.isOpened():
-            return jsonify({"error": "Failed to open VideoWriter"}), 500
+        out = cv2.VideoWriter(
+            output_path,
+            fourcc,
+            fps,
+            (output_width, output_height)
+        )
 
         # פריים ראשון
         first_frame = frame.copy()
         cv2.rectangle(first_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        out.write(first_frame)
 
-        frame_count = 1
+        # 🔥 חשוב — resize
+        first_frame = cv2.resize(first_frame, (output_width, output_height))
+        out.write(first_frame)
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-
-            if frame is None:
-                print("Skipped None frame")
-                continue
-
-            if frame.shape[1] != width or frame.shape[0] != height:
-                frame = cv2.resize(frame, (width, height))
 
             output_frame = frame.copy()
             success, box = tracker.update(frame)
@@ -117,29 +87,13 @@ def process_video():
                 bx, by, bw, bh = [int(v) for v in box]
                 cv2.rectangle(output_frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
 
-            if frame_count % 30 == 0:
-                print(f"frame {frame_count}, mean={float(output_frame.mean())}")
+            # 🔥 זה השינוי הכי חשוב
+            output_frame = cv2.resize(output_frame, (output_width, output_height))
 
             out.write(output_frame)
-            frame_count += 1
-
-        print("total frames written:", frame_count)
 
         cap.release()
         out.release()
-        cap = None
-        out = None
-
-        if not os.path.exists(output_path):
-            return jsonify({"error": "Output file was not created"}), 500
-
-        file_size = os.path.getsize(output_path)
-        print("output file size:", file_size)
-
-        if file_size == 0:
-            return jsonify({"error": "Output file is empty"}), 500
-
-        print("=== PROCESS FINISHED SUCCESSFULLY ===")
 
         return send_file(
             output_path,
@@ -149,19 +103,11 @@ def process_video():
         )
 
     except Exception as e:
-        print("SERVER ERROR:", str(e))
         return jsonify({"error": str(e)}), 500
 
     finally:
-        if cap is not None:
-            cap.release()
-        if out is not None:
-            out.release()
         if input_path and os.path.exists(input_path):
-            try:
-                os.unlink(input_path)
-            except Exception:
-                pass
+            os.unlink(input_path)
 
 
 if __name__ == "__main__":
