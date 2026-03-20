@@ -3,6 +3,7 @@ from flask_cors import CORS
 import tempfile
 import os
 import cv2
+import numpy as np
 
 app = Flask(__name__)
 CORS(app)
@@ -13,10 +14,30 @@ def home():
     return jsonify({"status": "server is running"})
 
 
+def fit_frame_with_padding(frame, target_width=1080, target_height=960):
+    h, w = frame.shape[:2]
+
+    scale = min(target_width / w, target_height / h)
+    new_width = int(w * scale)
+    new_height = int(h * scale)
+
+    resized = cv2.resize(frame, (new_width, new_height))
+
+    canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+    x_offset = (target_width - new_width) // 2
+    y_offset = (target_height - new_height) // 2
+
+    canvas[y_offset:y_offset + new_height, x_offset:x_offset + new_width] = resized
+    return canvas
+
+
 @app.route("/process", methods=["POST"])
 def process_video():
     input_path = None
     output_path = None
+    cap = None
+    out = None
 
     try:
         x = int(request.form.get("x", 0))
@@ -47,32 +68,35 @@ def process_video():
         if not ret:
             return jsonify({"error": "Failed to read first frame"}), 500
 
-        # 🎯 פורמט לאורך (9:16)
-        output_width = 720
-        output_height = 1280
+        original_height, original_width = frame.shape[:2]
 
-        tracker = None
+        x = max(0, min(x, original_width - 1))
+        y = max(0, min(y, original_height - 1))
+        w = max(1, min(w, original_width - x))
+        h = max(1, min(h, original_height - y))
+
         try:
             tracker = cv2.legacy.TrackerCSRT_create()
         except Exception:
-            tracker = cv2.legacy.TrackerMOSSE_create()
+            try:
+                tracker = cv2.legacy.TrackerMOSSE_create()
+            except Exception:
+                return jsonify({"error": "No supported OpenCV tracker found"}), 500
 
         tracker.init(frame, (x, y, w, h))
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(
-            output_path,
-            fourcc,
-            fps,
-            (output_width, output_height)
-        )
+        output_width = 1080
+        output_height = 960
 
-        # פריים ראשון
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
+
+        if not out.isOpened():
+            return jsonify({"error": "Failed to open VideoWriter"}), 500
+
         first_frame = frame.copy()
         cv2.rectangle(first_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-        # 🔥 חשוב — resize
-        first_frame = cv2.resize(first_frame, (output_width, output_height))
+        first_frame = fit_frame_with_padding(first_frame, output_width, output_height)
         out.write(first_frame)
 
         while True:
@@ -87,13 +111,13 @@ def process_video():
                 bx, by, bw, bh = [int(v) for v in box]
                 cv2.rectangle(output_frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
 
-            # 🔥 זה השינוי הכי חשוב
-            output_frame = cv2.resize(output_frame, (output_width, output_height))
-
+            output_frame = fit_frame_with_padding(output_frame, output_width, output_height)
             out.write(output_frame)
 
         cap.release()
         out.release()
+        cap = None
+        out = None
 
         return send_file(
             output_path,
@@ -106,8 +130,15 @@ def process_video():
         return jsonify({"error": str(e)}), 500
 
     finally:
+        if cap is not None:
+            cap.release()
+        if out is not None:
+            out.release()
         if input_path and os.path.exists(input_path):
-            os.unlink(input_path)
+            try:
+                os.unlink(input_path)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
