@@ -1,10 +1,8 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-from ultralytics import YOLO
 import cv2
 import os
 import uuid
-import math
 
 app = Flask(__name__)
 CORS(app)
@@ -14,44 +12,6 @@ OUTPUT_FOLDER = "outputs"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-# YOLO11 נתמך ב-Ultralytics, וקובצי משקל כמו yolo11n.pt הם פורמט תקין. 
-# אם תרצה בהמשך, אפשר להחליף ל-yolo11s.pt לדיוק טוב יותר.
-model = YOLO("yolo11n.pt")
-
-
-def get_iou(box1, box2):
-    x1, y1, w1, h1 = box1
-    x2, y2, w2, h2 = box2
-
-    xa = max(x1, x2)
-    ya = max(y1, y2)
-    xb = min(x1 + w1, x2 + w2)
-    yb = min(y1 + h1, y2 + h2)
-
-    inter_w = max(0, xb - xa)
-    inter_h = max(0, yb - ya)
-    inter_area = inter_w * inter_h
-
-    box1_area = w1 * h1
-    box2_area = w2 * h2
-    union_area = box1_area + box2_area - inter_area
-
-    if union_area == 0:
-        return 0
-
-    return inter_area / union_area
-
-
-def get_center(box):
-    x, y, w, h = box
-    return (x + w / 2, y + h / 2)
-
-
-def center_distance(box1, box2):
-    c1x, c1y = get_center(box1)
-    c2x, c2y = get_center(box2)
-    return math.sqrt((c1x - c2x) ** 2 + (c1y - c2y) ** 2)
 
 
 @app.route("/", methods=["GET"])
@@ -77,8 +37,6 @@ def process_video():
         y = int(float(request.form["y"]))
         box_w = int(float(request.form["width"]))
         box_h = int(float(request.form["height"]))
-
-        selected_box = (x, y, box_w, box_h)
 
         input_filename = f"{uuid.uuid4()}.mp4"
         output_filename = f"{uuid.uuid4()}.mp4"
@@ -112,73 +70,41 @@ def process_video():
             cap.release()
             return jsonify({"error": "VideoWriter failed to open"}), 500
 
-        tracked_box = selected_box
+        ret, first_frame = cap.read()
+        if not ret or first_frame is None:
+            cap.release()
+            video_writer.release()
+            return jsonify({"error": "Could not read first frame"}), 400
+
+        tracker = cv2.TrackerCSRT_create()
+        tracker.init(first_frame, (x, y, box_w, box_h))
+
+        current_frame = first_frame
         smooth_center_x = None
-        frame_index = 0
+        last_good_center_x = None
 
         while True:
-            ret, frame = cap.read()
-            if not ret:
+            frame = current_frame
+            if frame is None:
                 break
 
-            if frame is None:
-                continue
-
+            success, box = tracker.update(frame)
             h, w = frame.shape[:2]
 
-            # YOLO כל 3 פריימים כדי לא להעמיס מדי
-            if frame_index % 3 == 0:
-                results = model(frame, verbose=False)
-
-                detections = []
-                if len(results) > 0:
-                    result = results[0]
-
-                    if result.boxes is not None:
-                        for box in result.boxes:
-                            cls_id = int(box.cls[0].item())
-                            conf = float(box.conf[0].item())
-
-                            # class 0 = person ב-COCO
-                            if cls_id != 0:
-                                continue
-
-                            if conf < 0.35:
-                                continue
-
-                            x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            px = int(x1)
-                            py = int(y1)
-                            pw = int(x2 - x1)
-                            ph = int(y2 - y1)
-
-                            detections.append((px, py, pw, ph))
-
-                if detections:
-                    best_box = None
-                    best_score = -1
-
-                    for det in detections:
-                        iou = get_iou(tracked_box, det)
-                        dist = center_distance(tracked_box, det)
-
-                        # ציון משולב: חפיפה + קרבה
-                        score = (iou * 3.0) - (dist / max(w, 1))
-
-                        if score > best_score:
-                            best_score = score
-                            best_box = det
-
-                    if best_box is not None:
-                        tracked_box = best_box
-
-            tx, ty, tw, th = tracked_box
-            player_center_x = tx + tw // 2
+            if success:
+                tx, ty, tw, th = [int(v) for v in box]
+                target_center_x = tx + tw // 2
+                last_good_center_x = target_center_x
+            else:
+                if last_good_center_x is not None:
+                    target_center_x = last_good_center_x
+                else:
+                    target_center_x = w // 2
 
             if smooth_center_x is None:
-                smooth_center_x = player_center_x
+                smooth_center_x = target_center_x
             else:
-                smooth_center_x = int(0.85 * smooth_center_x + 0.15 * player_center_x)
+                smooth_center_x = int(0.9 * smooth_center_x + 0.1 * target_center_x)
 
             crop_width = int(h * 9 / 16)
 
@@ -200,7 +126,10 @@ def process_video():
                 vertical_frame = cv2.resize(cropped, (output_width, output_height))
 
             video_writer.write(vertical_frame)
-            frame_index += 1
+
+            ret, current_frame = cap.read()
+            if not ret:
+                break
 
         cap.release()
         video_writer.release()
