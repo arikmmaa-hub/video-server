@@ -1,146 +1,109 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-import tempfile
-import os
 import cv2
-import numpy as np
+import os
+import uuid
 
 app = Flask(__name__)
 CORS(app)
 
+UPLOAD_FOLDER = "uploads"
+OUTPUT_FOLDER = "outputs"
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "server is running"})
-
-
-def fit_frame_with_padding(frame, target_width=1080, target_height=960):
-    h, w = frame.shape[:2]
-
-    scale = min(target_width / w, target_height / h)
-    new_width = int(w * scale)
-    new_height = int(h * scale)
-
-    resized = cv2.resize(frame, (new_width, new_height))
-
-    canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-
-    x_offset = (target_width - new_width) // 2
-    y_offset = (target_height - new_height) // 2
-
-    canvas[y_offset:y_offset + new_height, x_offset:x_offset + new_width] = resized
-    return canvas
+    return jsonify({"message": "Server is running"})
 
 
 @app.route("/process", methods=["POST"])
 def process_video():
-    input_path = None
-    output_path = None
-    cap = None
-    out = None
-
     try:
-        x = int(request.form.get("x", 0))
-        y = int(request.form.get("y", 0))
-        w = int(request.form.get("width", 100))
-        h = int(request.form.get("height", 100))
-
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
 
         video_file = request.files["video"]
 
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as input_file:
-            video_file.save(input_file.name)
-            input_path = input_file.name
+        input_filename = f"{uuid.uuid4()}.mp4"
+        output_filename = f"{uuid.uuid4()}.mp4"
 
-        output_path = input_path.replace(".mp4", "_tracked.mp4")
+        input_path = os.path.join(UPLOAD_FOLDER, input_filename)
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+
+        video_file.save(input_path)
 
         cap = cv2.VideoCapture(input_path)
+
         if not cap.isOpened():
-            return jsonify({"error": "Failed to open video"}), 500
+            return jsonify({"error": "Could not open input video"}), 400
 
         fps = cap.get(cv2.CAP_PROP_FPS)
-        if not fps or fps <= 0:
-            fps = 30.0
-
-        ret, frame = cap.read()
-        if not ret:
-            return jsonify({"error": "Failed to read first frame"}), 500
-
-        original_height, original_width = frame.shape[:2]
-
-        x = max(0, min(x, original_width - 1))
-        y = max(0, min(y, original_height - 1))
-        w = max(1, min(w, original_width - x))
-        h = max(1, min(h, original_height - y))
-
-        try:
-            tracker = cv2.legacy.TrackerCSRT_create()
-        except Exception:
-            try:
-                tracker = cv2.legacy.TrackerMOSSE_create()
-            except Exception:
-                return jsonify({"error": "No supported OpenCV tracker found"}), 500
-
-        tracker.init(frame, (x, y, w, h))
+        if fps <= 0:
+            fps = 30
 
         output_width = 1080
-        output_height = 960
+        output_height = 1920
 
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
+        video_writer = cv2.VideoWriter(
+            output_path,
+            fourcc,
+            fps,
+            (output_width, output_height)
+        )
 
-        if not out.isOpened():
-            return jsonify({"error": "Failed to open VideoWriter"}), 500
-
-        first_frame = frame.copy()
-        cv2.rectangle(first_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        first_frame = fit_frame_with_padding(first_frame, output_width, output_height)
-        out.write(first_frame)
+        if not video_writer.isOpened():
+            cap.release()
+            return jsonify({"error": "VideoWriter failed to open"}), 500
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            output_frame = frame.copy()
-            success, box = tracker.update(frame)
+            if frame is None:
+                continue
 
-            if success:
-                bx, by, bw, bh = [int(v) for v in box]
-                cv2.rectangle(output_frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+            h, w = frame.shape[:2]
 
-            output_frame = fit_frame_with_padding(output_frame, output_width, output_height)
-            out.write(output_frame)
+            # חיתוך מהמרכז לפורמט אנכי 9:16
+            target_ratio = 9 / 16
+            new_width = int(h * target_ratio)
+
+            if new_width > w:
+                # אם הווידאו צר מדי, פשוט נבצע resize
+                vertical_frame = cv2.resize(frame, (output_width, output_height))
+            else:
+                x1 = (w - new_width) // 2
+                x2 = x1 + new_width
+                cropped = frame[:, x1:x2]
+                vertical_frame = cv2.resize(cropped, (output_width, output_height))
+
+            video_writer.write(vertical_frame)
 
         cap.release()
-        out.release()
-        cap = None
-        out = None
+        video_writer.release()
+
+        if not os.path.exists(output_path):
+            return jsonify({"error": "Output file was not created"}), 500
+
+        if os.path.getsize(output_path) == 0:
+            return jsonify({"error": "Output file is empty"}), 500
 
         return send_file(
             output_path,
-            mimetype="video/mp4",
             as_attachment=True,
-            download_name="tracked_clip.mp4"
+            download_name="tracked_clip.mp4",
+            mimetype="video/mp4"
         )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    finally:
-        if cap is not None:
-            cap.release()
-        if out is not None:
-            out.release()
-        if input_path and os.path.exists(input_path):
-            try:
-                os.unlink(input_path)
-            except Exception:
-                pass
-
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
