@@ -21,11 +21,22 @@ def home():
 
 @app.route("/process", methods=["POST"])
 def process_video():
+    cap = None
+    video_writer = None
+
     try:
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
 
+        if "x" not in request.form or "y" not in request.form or "width" not in request.form or "height" not in request.form:
+            return jsonify({"error": "Missing tracking box data"}), 400
+
         video_file = request.files["video"]
+
+        x = int(float(request.form["x"]))
+        y = int(float(request.form["y"]))
+        box_w = int(float(request.form["width"]))
+        box_h = int(float(request.form["height"]))
 
         input_filename = f"{uuid.uuid4()}.mp4"
         output_filename = f"{uuid.uuid4()}.mp4"
@@ -59,30 +70,56 @@ def process_video():
             cap.release()
             return jsonify({"error": "VideoWriter failed to open"}), 500
 
+        ret, first_frame = cap.read()
+        if not ret or first_frame is None:
+            cap.release()
+            video_writer.release()
+            return jsonify({"error": "Could not read first frame"}), 400
+
+        tracker = cv2.TrackerCSRT_create()
+        tracker.init(first_frame, (x, y, box_w, box_h))
+
+        current_frame = first_frame
+
         while True:
-            ret, frame = cap.read()
-            if not ret:
+            frame = current_frame
+            if frame is None:
                 break
 
-            if frame is None:
-                continue
+            success, box = tracker.update(frame)
 
             h, w = frame.shape[:2]
 
-            # חיתוך מהמרכז לפורמט אנכי 9:16
-            target_ratio = 9 / 16
-            new_width = int(h * target_ratio)
+            if success:
+                tx, ty, tw, th = [int(v) for v in box]
+                ball_center_x = tx + tw // 2
+            else:
+                ball_center_x = w // 2
 
-            if new_width > w:
-                # אם הווידאו צר מדי, פשוט נבצע resize
+            crop_width = int(h * 9 / 16)
+
+            if crop_width > w:
                 vertical_frame = cv2.resize(frame, (output_width, output_height))
             else:
-                x1 = (w - new_width) // 2
-                x2 = x1 + new_width
+                x1 = ball_center_x - crop_width // 2
+                x2 = x1 + crop_width
+
+                if x1 < 0:
+                    x1 = 0
+                    x2 = crop_width
+
+                if x2 > w:
+                    x2 = w
+                    x1 = w - crop_width
+
                 cropped = frame[:, x1:x2]
                 vertical_frame = cv2.resize(cropped, (output_width, output_height))
 
             video_writer.write(vertical_frame)
+
+            ret, current_frame = cap.read()
+            if not ret:
+                break
 
         cap.release()
         video_writer.release()
@@ -102,6 +139,12 @@ def process_video():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+    finally:
+        if cap is not None:
+            cap.release()
+        if video_writer is not None:
+            video_writer.release()
 
 
 if __name__ == "__main__":
