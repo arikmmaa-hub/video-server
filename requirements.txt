@@ -1,6 +1,5 @@
 flask
 flask-cors
-gunicorn
-opencv-contrib-python-headless
+ultralytics
+opencv-python-headless
 numpy
-
