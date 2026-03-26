@@ -14,13 +14,22 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
+# ========================
+# ROOT (בדיקה)
+# ========================
 @app.route("/", methods=["GET"])
 def home():
+    print("🔥 ROOT endpoint hit")
     return jsonify({"message": "Server is running"})
 
 
+# ========================
+# PROCESS
+# ========================
 @app.route("/process", methods=["POST"])
 def process_video():
+    print("🔥 PROCESS endpoint hit")
+
     cap = None
     video_writer = None
 
@@ -67,13 +76,10 @@ def process_video():
         )
 
         if not video_writer.isOpened():
-            cap.release()
             return jsonify({"error": "VideoWriter failed to open"}), 500
 
         ret, first_frame = cap.read()
-        if not ret or first_frame is None:
-            cap.release()
-            video_writer.release()
+        if not ret:
             return jsonify({"error": "Could not read first frame"}), 400
 
         tracker = cv2.TrackerCSRT_create()
@@ -96,10 +102,7 @@ def process_video():
                 target_center_x = tx + tw // 2
                 last_good_center_x = target_center_x
             else:
-                if last_good_center_x is not None:
-                    target_center_x = last_good_center_x
-                else:
-                    target_center_x = w // 2
+                target_center_x = last_good_center_x if last_good_center_x else w // 2
 
             if smooth_center_x is None:
                 smooth_center_x = target_center_x
@@ -134,12 +137,6 @@ def process_video():
         cap.release()
         video_writer.release()
 
-        if not os.path.exists(output_path):
-            return jsonify({"error": "Output file was not created"}), 500
-
-        if os.path.getsize(output_path) == 0:
-            return jsonify({"error": "Output file is empty"}), 500
-
         return send_file(
             output_path,
             as_attachment=True,
@@ -148,6 +145,7 @@ def process_video():
         )
 
     except Exception as e:
+        print("❌ ERROR:", str(e))
         return jsonify({"error": str(e)}), 500
 
     finally:
@@ -157,6 +155,10 @@ def process_video():
             video_writer.release()
 
 
+# ========================
+# RUN
+# ========================
 if __name__ == "__main__":
+    print("🚀 Starting server...")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
