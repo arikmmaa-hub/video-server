@@ -5,37 +5,57 @@ import os
 import uuid
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["*"], methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "Server is running"})
 
+@app.route("/upload", methods=["POST"])
+def upload_video():
+    try:
+        if "video" not in request.files:
+            return jsonify({"error": "No video file uploaded"}), 400
+        
+        video_file = request.files["video"]
+        filename = f"{uuid.uuid4()}.mp4"
+        file_path = os.path.join(UPLOAD_FOLDER, filename)
+        video_file.save(file_path)
+        
+        base_url = request.host_url.rstrip("/")
+        video_url = f"{base_url}/uploads/{filename}"
+        
+        return jsonify({"url": video_url, "filename": filename})
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/uploads/<filename>", methods=["GET"])
+def serve_video(filename):
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+    return send_file(file_path, mimetype="video/mp4")
 
 @app.route("/process", methods=["POST"])
 def process_video():
     cap = None
     video_writer = None
-
     try:
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
 
         video_file = request.files["video"]
-
         x = int(float(request.form["x"]))
         y = int(float(request.form["y"]))
         box_w = int(float(request.form["width"]))
         box_h = int(float(request.form["height"]))
 
-        # 👉 padding - משפר tracking
         padding = 0.3
         x = int(x - box_w * padding)
         y = int(y - box_h * padding)
@@ -44,18 +64,15 @@ def process_video():
 
         input_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp4")
         output_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp4")
-
         video_file.save(input_path)
 
         cap = cv2.VideoCapture(input_path)
-
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30
 
         output_width = 1080
         output_height = 1920
-
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_writer = cv2.VideoWriter(
             output_path, fourcc, fps, (output_width, output_height)
@@ -83,14 +100,11 @@ def process_video():
                 lost_counter = 0
             else:
                 lost_counter += 1
-
-                # 👉 אם איבד - תמשיך לפי האחרון
                 if last_good_center_x is not None:
                     target_center_x = last_good_center_x
                 else:
                     target_center_x = w // 2
 
-            # 👉 smoothing משופר
             if smooth_center_x is None:
                 smooth_center_x = target_center_x
             else:
@@ -98,21 +112,17 @@ def process_video():
                 smooth_center_x = int(alpha * smooth_center_x + (1 - alpha) * target_center_x)
 
             crop_width = int(h * 9 / 16)
-
             if crop_width >= w:
                 vertical_frame = cv2.resize(frame, (output_width, output_height))
             else:
                 x1 = smooth_center_x - crop_width // 2
                 x2 = x1 + crop_width
-
                 x1 = max(0, x1)
                 x2 = min(w, x2)
-
                 cropped = frame[:, x1:x2]
                 vertical_frame = cv2.resize(cropped, (output_width, output_height))
 
             video_writer.write(vertical_frame)
-
             ret, frame = cap.read()
             if not ret:
                 break
@@ -129,13 +139,11 @@ def process_video():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
     finally:
         if cap:
             cap.release()
         if video_writer:
             video_writer.release()
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
