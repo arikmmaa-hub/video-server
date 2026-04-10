@@ -5,7 +5,7 @@ import os
 import uuid
 
 app = Flask(__name__)
-CORS(app, origins=["*"], methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}})
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
@@ -16,8 +16,14 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 def home():
     return jsonify({"message": "Server is running"})
 
-@app.route("/upload", methods=["POST"])
+@app.route("/upload", methods=["POST", "OPTIONS"])
 def upload_video():
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        return response
     try:
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
@@ -30,7 +36,9 @@ def upload_video():
         base_url = request.host_url.rstrip("/")
         video_url = f"{base_url}/uploads/{filename}"
         
-        return jsonify({"url": video_url, "filename": filename})
+        response = jsonify({"url": video_url, "filename": filename})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -42,8 +50,15 @@ def serve_video(filename):
         return jsonify({"error": "File not found"}), 404
     return send_file(file_path, mimetype="video/mp4")
 
-@app.route("/process", methods=["POST"])
+@app.route("/process", methods=["POST", "OPTIONS"])
 def process_video():
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        return response
+    
     cap = None
     video_writer = None
     try:
@@ -130,12 +145,14 @@ def process_video():
         cap.release()
         video_writer.release()
 
-        return send_file(
+        response = send_file(
             output_path,
             as_attachment=True,
             download_name="tracked_clip.mp4",
             mimetype="video/mp4"
         )
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
