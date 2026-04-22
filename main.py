@@ -5,7 +5,7 @@ import os
 import uuid
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}})
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"]}})
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
@@ -21,7 +21,7 @@ def upload_video():
     if request.method == "OPTIONS":
         response = jsonify({"status": "ok"})
         response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Accept")
         response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         return response
     try:
@@ -48,14 +48,16 @@ def serve_video(filename):
     file_path = os.path.join(UPLOAD_FOLDER, filename)
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
-    return send_file(file_path, mimetype="video/mp4")
+    response = send_file(file_path, mimetype="video/mp4")
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
 @app.route("/process", methods=["POST", "OPTIONS"])
 def process_video():
     if request.method == "OPTIONS":
         response = jsonify({"status": "ok"})
         response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Accept")
         response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         return response
     
