@@ -5,6 +5,7 @@ import os
 import uuid
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
 
 allowed_origins = [
     "*",
