@@ -5,12 +5,29 @@ import os
 import uuid
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"]}})
+
+allowed_origins = [
+    "*",
+    "https://als-dev-hkaxsjugb7cqjea5puow2b-95975049293.europe-west2.run.app"
+]
+
+CORS(app, resources={r"/*": {
+    "origins": allowed_origins,
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
+}})
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+@app.after_request
+def after_request(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Accept,Origin")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+    return response
 
 @app.route("/", methods=["GET"])
 def home():
@@ -19,11 +36,7 @@ def home():
 @app.route("/upload", methods=["POST", "OPTIONS"])
 def upload_video():
     if request.method == "OPTIONS":
-        response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Accept")
-        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        return response
+        return jsonify({"status": "ok"})
     try:
         if "video" not in request.files:
             return jsonify({"error": "No video file uploaded"}), 400
@@ -36,9 +49,7 @@ def upload_video():
         base_url = request.host_url.rstrip("/")
         video_url = f"{base_url}/uploads/{filename}"
         
-        response = jsonify({"url": video_url, "filename": filename})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        return response
+        return jsonify({"url": video_url, "filename": filename})
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -48,18 +59,12 @@ def serve_video(filename):
     file_path = os.path.join(UPLOAD_FOLDER, filename)
     if not os.path.exists(file_path):
         return jsonify({"error": "File not found"}), 404
-    response = send_file(file_path, mimetype="video/mp4")
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    return send_file(file_path, mimetype="video/mp4")
 
 @app.route("/process", methods=["POST", "OPTIONS"])
 def process_video():
     if request.method == "OPTIONS":
-        response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Accept")
-        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        return response
+        return jsonify({"status": "ok"})
     
     cap = None
     video_writer = None
@@ -147,14 +152,12 @@ def process_video():
         cap.release()
         video_writer.release()
 
-        response = send_file(
+        return send_file(
             output_path,
             as_attachment=True,
             download_name="tracked_clip.mp4",
             mimetype="video/mp4"
         )
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        return response
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
