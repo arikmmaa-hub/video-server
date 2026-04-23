@@ -5,7 +5,7 @@ import os
 import uuid
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB per chunk
 
 allowed_origins = [
     "*",
@@ -20,8 +20,10 @@ CORS(app, resources={r"/*": {
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
+CHUNKS_FOLDER = "chunks"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(CHUNKS_FOLDER, exist_ok=True)
 
 @app.after_request
 def after_request(response):
@@ -33,6 +35,64 @@ def after_request(response):
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "Server is running"})
+
+@app.route("/upload-chunk", methods=["POST", "OPTIONS"])
+def upload_chunk():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        chunk = request.files.get("chunk")
+        upload_id = request.form.get("uploadId")
+        chunk_index = request.form.get("chunkIndex")
+        
+        if not chunk or not upload_id or chunk_index is None:
+            return jsonify({"error": "Missing chunk data"}), 400
+        
+        chunk_dir = os.path.join(CHUNKS_FOLDER, upload_id)
+        os.makedirs(chunk_dir, exist_ok=True)
+        
+        chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index}")
+        chunk.save(chunk_path)
+        
+        return jsonify({"status": "ok", "chunkIndex": chunk_index})
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/upload-complete", methods=["POST", "OPTIONS"])
+def upload_complete():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        data = request.get_json()
+        upload_id = data.get("uploadId")
+        total_chunks = data.get("totalChunks")
+        
+        if not upload_id or not total_chunks:
+            return jsonify({"error": "Missing data"}), 400
+        
+        filename = f"{uuid.uuid4()}.mp4"
+        output_path = os.path.join(UPLOAD_FOLDER, filename)
+        
+        with open(output_path, "wb") as output_file:
+            for i in range(int(total_chunks)):
+                chunk_path = os.path.join(CHUNKS_FOLDER, upload_id, f"chunk_{i}")
+                with open(chunk_path, "rb") as chunk_file:
+                    output_file.write(chunk_file.read())
+        
+        # נקה את ה-chunks
+        chunk_dir = os.path.join(CHUNKS_FOLDER, upload_id)
+        for f in os.listdir(chunk_dir):
+            os.remove(os.path.join(chunk_dir, f))
+        os.rmdir(chunk_dir)
+        
+        base_url = request.host_url.rstrip("/")
+        video_url = f"{base_url}/uploads/{filename}"
+        
+        return jsonify({"url": video_url, "filename": filename})
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/upload", methods=["POST", "OPTIONS"])
 def upload_video():
